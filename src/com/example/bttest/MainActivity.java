@@ -1,24 +1,16 @@
 package com.example.bttest;
 
 import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.os.Bundle;
-import android.support.v4.app.Fragment;
+import android.os.Handler;
 import android.support.v7.app.ActionBarActivity;
-import android.util.Log;
-import android.view.LayoutInflater;
-import android.view.Menu;
-import android.view.MenuItem;
-import android.view.View;
-import android.view.ViewGroup;
 
 public class MainActivity extends ActionBarActivity {
 
 	private final int REQUEST_ENABLE_BT = 1;
+	private final int MESSAGE_READ = 1337;
+	BluetoothAdapter mBluetoothAdapter = null;
+	public Handler mHandler = null;
 	
 	@Override
 	protected void onCreate(Bundle savedInstanceState) {
@@ -30,7 +22,39 @@ public class MainActivity extends ActionBarActivity {
 					.add(R.id.container, new PlaceholderFragment()).commit();
 		}
 		
-		BluetoothAdapter mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+		mHandler = new Handler() {
+			public void handleMessage(Message msg) {
+				switch (msg.what) {
+				case SOCKET_CONNECTED: {
+					mBluetoothConnection = (ConnectionThread) msg.obj;
+					if (!mServerMode)
+					mBluetoothConnection.write("this is a message".getBytes());
+					break;
+				}
+				
+				case DATA_RECEIVED: {
+					data = (String) msg.obj;
+					tv.setText(data);
+					if (mServerMode)
+					mBluetoothConnection.write(data.getBytes());
+				}
+				
+				case MESSAGE_READ:
+				// your code goes here
+				}
+			}
+		};
+		
+		InitializeBluetooth();
+	    
+	    TelephonyManager tManager = (TelephonyManager)getSystemService(Context.TELEPHONY_SERVICE);
+	    String uuid = tManager.getDeviceId();
+	    Log.i( "UUID", uuid );
+	}
+	
+	// Initialize all of the bluetooth stuff
+	private void InitializeBluetooth() {
+		mBluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
 		if (mBluetoothAdapter == null) {
 			Log.i("MAIN", "No Bluetooth support :(");
 		}
@@ -41,23 +65,51 @@ public class MainActivity extends ActionBarActivity {
 		    startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
 		}
 		
-		// Create a BroadcastReceiver for ACTION_FOUND
-		private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
-		    public void onReceive(Context context, Intent intent) {
-		        String action = intent.getAction();
-		        // When discovery finds a device
-		        if (BluetoothDevice.ACTION_FOUND.equals(action)) {
-		            // Get the BluetoothDevice object from the Intent
-		            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
-		            // Add the name and address to an array adapter to show in a ListView
-		            Log.i(BLUETOOTH_SERVICE, device.getName() + " - " + device.getAddress());
-		        }
-		    }
-		};
 		// Register the BroadcastReceiver
 		IntentFilter filter = new IntentFilter(BluetoothDevice.ACTION_FOUND);
 		registerReceiver(mReceiver, filter); // Don't forget to unregister during onDestroy
+		
+	    final Handler h = new Handler();
+	    h.postDelayed(new Runnable()
+	    {
+	        //private long time = 0;
+
+	        @Override
+	        public void run()
+	        {
+	            // do stuff then
+	            // can call h again after work!
+	            //time += 1000;
+	            h.postDelayed(this, 1000);
+	            if ( !mBluetoothAdapter.isDiscovering() )
+	            	mBluetoothAdapter.startDiscovery();
+	        }
+	    }, 1000);
 	}
+	
+	// Create a BroadcastReceiver for ACTION_FOUND
+	final BroadcastReceiver mReceiver = new BroadcastReceiver() {
+	    public void onReceive(Context context, Intent intent) {
+	        String action = intent.getAction();
+	        // When discovery finds a device
+	        if (BluetoothDevice.ACTION_FOUND.equals(action)) {
+	            // Get the BluetoothDevice object from the Intent
+	            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+	            // Add the name and address to an array adapter to show in a ListView
+	            Log.i( BLUETOOTH_SERVICE, device.getName() + " - " + device.getAddress() );
+	            
+				Set<BluetoothDevice> pairedDevices = mBluetoothAdapter.getBondedDevices();
+				// If there are paired devices
+				if (pairedDevices.size() > 0) {
+					// Loop through paired devices
+					for (BluetoothDevice dev : pairedDevices) {
+						// Add the name and address to an array adapter to show in a ListView
+						Log.i( BLUETOOTH_SERVICE, dev.getName() + " - " + dev.getAddress() );
+					}
+				}
+	        }
+	    }
+	};
 	
 	@Override
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -109,5 +161,58 @@ public class MainActivity extends ActionBarActivity {
 					false);
 			return rootView;
 		}
+	}
+	
+	private class ConnectedThread extends Thread {
+	    private final BluetoothSocket mmSocket;
+	    private final InputStream mmInStream;
+	    private final OutputStream mmOutStream;
+	 
+	    public ConnectedThread(BluetoothSocket socket) {
+	        mmSocket = socket;
+	        InputStream tmpIn = null;
+	        OutputStream tmpOut = null;
+	 
+	        // Get the input and output streams, using temp objects because
+	        // member streams are final
+	        try {
+	            tmpIn = socket.getInputStream();
+	            tmpOut = socket.getOutputStream();
+	        } catch (IOException e) { }
+	 
+	        mmInStream = tmpIn;
+	        mmOutStream = tmpOut;
+	    }
+	 
+	    public void run() {
+	        byte[] buffer = new byte[1024];  // buffer store for the stream
+	        int bytes; // bytes returned from read()
+	 
+	        // Keep listening to the InputStream until an exception occurs
+	        while (true) {
+	            try {
+	                // Read from the InputStream
+	                bytes = mmInStream.read(buffer);
+	                // Send the obtained bytes to the UI activity
+	                mHandler.obtainMessage(MESSAGE_READ, bytes, -1, buffer).sendToTarget();
+	            } catch (IOException e) {
+	                break;
+	            }
+	        }
+	    }
+	 
+	    /* Call this from the main activity to send data to the remote device */
+	    public void write(byte[] bytes) {
+	        try {
+	            mmOutStream.write(bytes);
+	        } catch (IOException e) { }
+	    }
+	 
+	    /* Call this from the main activity to shutdown the connection */
+	    public void cancel() {
+	        try {
+	            mmSocket.close();
+	        } catch (IOException e) { }
+	    }
 	}
 }
